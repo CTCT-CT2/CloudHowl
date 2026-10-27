@@ -1,0 +1,13 @@
+agent_name: CloudHowl
+success_rate: 0.9522
+link: https://github.com/CTCT-CT2/CloudHowl
+category: agent
+models:
+  - name: GLM-5.3
+    input_tokens: 548729
+    cache_read_tokens: 5742386
+    cache_creation_tokens: 0
+    output_tokens: 112465
+    est_usd_cost: null
+    time_cost_sec: 2764
+    llm_requests: 153
