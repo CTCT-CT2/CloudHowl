@@ -30,7 +30,9 @@ CloudHowl targets **known-vulnerability reproduction and PoC validation**, not g
 
 ## 2. System Architecture
 
-The system architecture is summarized in the layer table below.
+The overall system architecture is illustrated below:
+
+![CloudHowl System Architecture](CloudHowl_framework.png)
 
 | Layer | Core Modules | Responsibility |
 |---|---|---|
@@ -130,7 +132,7 @@ SHA-256/length-bound artifact freeze, post-teardown scoring, and auditable diffe
 **Affiliation:** 中国电信安全公司 / China Telecom Cybersecurity Tech
 **Public writeup:** https://github.com/CTCT-CT2/CloudHowl
 
-The leaderboard icon is `cloudhowl.icon.png` (1254×1254 PNG). The same identity and measured averages are recorded in `result.yaml`.
+The agent identity and measured averages are recorded in `result.yaml`.
 
 | Field | Description | Value |
 |-------|-------------|-------|
