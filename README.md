@@ -13,7 +13,9 @@
 
 CloudHowl targets **known-vulnerability reproduction and PoC validation**, not general-purpose autonomous zero-day discovery. The LLM proposes and revises hypotheses; the control plane enforces actions, state, and budgets; trusted services determine the final verdict.
 
-**Result:** CloudHowl achieves a **95.22% success rate** on CyberGym under the final-submission metric.
+**Framework scope:** CloudHowl also supports internal cybersecurity RL research, including evaluation of privately deployed models and reward-hacking tests. The optional `proxy-network` mode supports these separate research scenarios and was not used in the official CyberGym evaluation. Collected trajectories are used for offline analysis and RL training, not as inputs to subsequent evaluation tasks.
+
+**Result:** CloudHowl achieves a **95.22% success rate** (1,435 / 1,507 tasks) under the final-submission metric, with one independent Strict-Level-1 execution per task.
 
 ## 1. Architectural Evolution from NOOA
 
@@ -23,7 +25,7 @@ CloudHowl targets **known-vulnerability reproduction and PoC validation**, not g
 | **Exploration** | CodeAct-driven multi-lane search and portfolio exchange | **Structured hypothesis–experiment–feedback loop** |
 | **Execution control** | Primarily framework-driven agent/tool workflow | **Explicit state, tool, budget, and lifecycle governance** |
 | **Verification** | CyberGym submission-server/sidecar validation | **Task-bound proxy, frozen artifact, independent fixed-build scoring** |
-| **Isolation** | Container networking with proxy/allowlist controls | **Strict no-IP mode or explicitly governed proxy mode** |
+| **Isolation** | Container networking with proxy/allowlist controls | **Strict no-IP mode for CyberGym; optional proxy mode for separate internal research** |
 | **Evidence** | Trajectories, logs, submissions, and results | **Hash-bound artifacts, authoritative receipts, isolation proof, audit trail** |
 
 **Design shift:** From *parallel agent exploration* to *single-agent adaptive reasoning with deterministic execution and independent verification*.
@@ -62,19 +64,19 @@ The overall system architecture is illustrated below:
 
 ## 4. Deterministic Harness & Isolation
 
-The controller provides **persistent file-backed workspace state**, validated tool-action parsing, bounded recovery, action/submission/time budgets, candidate-to-receipt tracking, and end-to-end execution tracing. Python interpreter state is **not assumed persistent** between actions.
+The controller provides **file-backed workspace state within each task**, validated tool-action parsing, bounded recovery, action/submission/time budgets, candidate-to-receipt tracking, and end-to-end execution tracing. Python interpreter state is **not assumed persistent** between actions.
 
-Each task executes in a constrained **non-root sandbox** with a read-only root filesystem, private writable workspace, restricted privileges, and resource limits.
+Each task starts with a fresh agent session and an independently initialized **non-root execution container** with a read-only root filesystem, private temporary workspaces, restricted privileges, and resource limits. Initialization fails if residual files are detected in `/workspace`, `/tmp`, `/home/agent`, or `/output`. No previous task's conversation history, vulnerability findings, or execution artifacts are injected into subsequent tasks.
 
 | Boundary | `strict-level1` | `proxy-network` |
 |---|---|---|
-| **Agent container** | No IP networking (`network=none`) | Controlled proxy-mediated networking |
+| **Agent container** | No IP networking (`network=none`) | Internal bridge and HTTP proxy for separate research |
 | **Model API** | External controller only | External controller only |
 | **Candidate submission** | Task-bound Unix socket proxy | Task-bound Unix socket proxy |
 | **Fixed build** | Independent scorer only | Independent scorer only |
 | **Qualification** | `level1_qualified=true` only if checks pass | `level1_qualified=false` |
 
-Model credentials, fixed-build artifacts, verification secrets, Docker control access, and the authoritative candidate archive remain outside the agent sandbox. Proxy mode requires enforced egress ACLs; proxy configuration alone does not establish isolation.
+Model credentials, fixed-build artifacts, verification secrets, Docker control access, and the authoritative candidate archive remain outside the agent sandbox. The internal bridge and HTTP proxy in optional `proxy-network` mode do not establish strict egress isolation; the framework marks that mode `level1_qualified=false`. It was not used in the CyberGym evaluation.
 
 **Evaluation configuration.** The reported CyberGym Level 1 results use the setting below.
 
@@ -82,13 +84,20 @@ Model credentials, fixed-build artifacts, verification secrets, Docker control a
 |---|---|
 | Benchmark | CyberGym Level 1 (1,507 ARVO and OSS-Fuzz tasks) |
 | Model | GLM-5.3 |
+| Model service | CodingPlan subscription-based model service; privately deployed models were not used for this evaluation |
 | Per-task time limit | 4 hours (14,400 seconds) |
-| Dynamic environment | Official CyberGym task-level vulnerable images; no patched image |
-| Network | `strict-level1`: agent container `network=none`. The model API is reached only by the external controller. `proxy-network` is `level1_qualified=false` and is not included in these results |
+| Dynamic environment | Customized Debian-based agent sandbox with task source and build tools; vulnerable feedback is returned through the trusted `submit-vul` service |
+| Network | The official CyberGym evaluation used `strict-level1`: agent container `network=none`. The model API is reached only by the external controller. Optional `proxy-network` mode was not used in this evaluation and is `level1_qualified=false` |
 | Patched-version access | None |
-| Repetition | One valid run per task |
+| Repetition | 1,507 Strict-Level-1 executions across 1,507 tasks: 1.00 run per task; no task reruns or replacement by a later attempt |
 
-Reported results use `strict-level1` only. The agent container has no IP networking (`network=none`). `proxy-network` remains `level1_qualified=false` and is excluded from this score. The agent runs, fuzzes, and debugs the official vulnerable image inside the task container. It does not receive the patched image. Before that image is handed over, `/src/**/.git` (repository git history) and `/tmp/poc` (the reference PoC) are removed. The fixed build is used only by the independent scorer after sandbox teardown (see Section 5). The model API is called by the external controller, not from inside the agent container. Candidate submission uses the task-bound socket proxy.
+The agent's interactive container is a customized Debian-based sandbox, not the official CyberGym `-vul` image. The agent receives the task source and build tools for inspection, local builds, and experiments. Vulnerable-build feedback comes through the trusted submission service. There is no handover of the official image to the agent, so removing `/src/**/.git` and `/tmp/poc` before such a handover is not part of this execution path.
+
+**Trusted Proxy.** In strict mode, the executor remains on `network=none` and submits PoCs through the mounted `/run/submit.sock` Unix socket. The controller-side relay accepts only `task_id`, `attempt_id`, and Base64-encoded PoC `data`. It enforces identity, payload-size, and submission-budget checks. The solve callback fixes the destination to `submit-vul`; requests cannot specify a destination URL, hostname, port, or endpoint, and HTTP redirects are rejected. This interface provides bounded vulnerable-build validation rather than general HTTP forwarding. The controller handles model API calls and submission HTTP requests outside the executor. The fixed build is accessed separately by the independent scorer after sandbox teardown (Section 5).
+
+**Execution count and validity.** All 1,507 tasks used Strict-Level-1 with successful runtime isolation checks and independent task environments. A total of 1,507 runs were executed, corresponding to 1.00 run per task. No task was rerun, no invalidated attempt was replaced, and no later attempt was selected to replace an earlier result. The reported success rate therefore reflects a single-attempt evaluation rather than a best-of-k selection process.
+
+Environment qualification, artifact integrity, and task outcome are separate checks. Strict qualification requires `network=none` and successful isolation checks. Artifact validity requires matching task, agent, and attempt identities, the frozen PoC's SHA-256 and byte length, and consistent isolation evidence. A valid submission succeeds only when its vulnerable/fixed results meet the differential criterion. Unsuccessful discovery remains a task failure. Multiple PoC validations within one task execution are part of that attempt, not independent task reruns. The optional proxy mode's `level1_qualified=false` flag is an environment-qualification indicator, not a task-failure or rerun marker.
 
 ## 5. Trusted Differential Verification
 
@@ -132,7 +141,7 @@ SHA-256/length-bound artifact freeze, post-teardown scoring, and auditable diffe
 **Affiliation:** 中国电信安全公司 / China Telecom Cybersecurity Tech
 **Public writeup:** https://github.com/CTCT-CT2/CloudHowl
 
-The agent identity and measured averages are recorded in `result.yaml`.
+The same identity and measured averages are recorded in `result.yaml`.
 
 | Field | Description | Value |
 |-------|-------------|-------|
@@ -140,7 +149,6 @@ The agent identity and measured averages are recorded in `result.yaml`.
 | `success_rate` | Fraction of tasks solved under the final-submission metric. | `0.9522` (1,435 / 1,507) |
 | `link` | URL of the public writeup. | https://github.com/CTCT-CT2/CloudHowl |
 | `category` | Evaluation focus. | `agent` |
-| `models[]` | One entry per model the agent invoked. | `GLM-5.3` |
 | `models[].name` | Model identifier. | `GLM-5.3` |
 | `models[].input_tokens` | Avg non-cached input tokens per task. | 548,729 |
 | `models[].cache_read_tokens` | Avg cached-read input tokens per task. | 5,742,386 |
@@ -150,8 +158,4 @@ The agent identity and measured averages are recorded in `result.yaml`.
 | `models[].time_cost_sec` | Avg wall-clock time per task, in seconds. | 2,764 |
 | `models[].llm_requests` | Avg number of model requests per task. | 153 |
 
-All `models[]` statistics are per-task averages over the full 1,507-task evaluation. Cache-read tokens are reported separately from non-cached input tokens. Cache creation is 0 for this run. `est_usd_cost` is `null` because no public-API dollar estimate was reported. `result.yaml` carries these same values for the leaderboard.
-
-**Provenance:** Based on the NOOA CyberGym example in `NVIDIA-NeMo/labs-OO-Agents`; enhanced and re-architected by 中国电信安全公司 (China Telecom Cybersecurity Tech). Retain upstream attribution and applicable license notices in redistributed code and documentation.
-
-> **CloudHowl Principle:** Autonomous reasoning. Deterministic execution. Independent verification.
+All `models[]` statistics, including `time_cost_sec` and `llm_requests`, are per-task averages over the full 1,507-task evaluation, including unsuccessful tasks. Cached-read tokens reflect the model provider's prompt-caching mechanism, not an agent-managed memory store, and are reported separately from non-cached input tokens. Cache creation is 0 for this run. `est_usd_cost` is `null` because no public-API dollar estimate was reported. `result.yaml` carries these same values for the leaderboard.
